@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MFL League</title>
+<style>html,body{margin:0;background:#060d1c}</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script>
+/* Veri tarayıcının localStorage alanında tutulur (yalnızca bu cihazda). Çok cihazlı canlı yayın için
+   window.storage.get/set fonksiyonlarını Firebase, Supabase vb. ile değiştirin. */
+window.storage = {
+  async get(k) { try { const v = localStorage.getItem(k); return v == null ? null : { key: k, value: v }; } catch (e) { return null; } },
+  async set(k, v) { try { localStorage.setItem(k, v); return { key: k, value: v }; } catch (e) { return null; } }
+};
+
+/* Hakem girişi: şifre düz metin olarak değil SHA-256 özeti olarak saklanır. Oturum sekme kapanınca biter. */
+(function () {
+  const H = "5dccd7c8d7a1c265b6771a7a2cde32261f20643fbeac5d5293ed1d9c9e228775";
+  const hash = async (t) => { const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)); return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join(""); };
+  const get = () => { try { return sessionStorage.getItem("mfl-ref") === H; } catch (e) { return false; } };
+  window.MFL_AUTH = {
+    async status() { return { exists: true, canSet: false, unlocked: get() }; },
+    async unlock(p) { try { if ((await hash(p)) === H) { try { sessionStorage.setItem("mfl-ref", H); } catch (e) {} return true; } } catch (e) {} return false; },
+    async set() { return false; },
+    lock() { try { sessionStorage.removeItem("mfl-ref"); } catch (e) {} }
+  };
+})();
+</script>
+<script>
+(function () {
+const { useState, useEffect, useRef, useMemo } = React;
+"use strict";
+/* MFL League: tek dosyalık React uygulaması.
+   Veri window.storage'a yazılır (claude.ai önizlemesi). Kendi projenizde store.get/store.set
+   fonksiyonlarını Firebase, Supabase vb. ile değiştirerek çok cihazlı canlı yayın yapabilirsiniz. */
+const store = {
+    async get() { try {
+        const r = await window.storage.get("mfl-data");
+        return r ? JSON.parse(r.value) : null;
+    }
+    catch {
+        return null;
+    } },
+    async set(v) { try {
+        await window.storage.set("mfl-data", JSON.stringify(v));
+    }
+    catch { } },
+};
+const CSS = `
+.mfl{--bg:#060d1c;--card:#0d1930;--in:#14223f;--ln:#1b2a49;--tx:#eaf0ff;--mu:#8d9bb8;--gold:#ffc83d;--live:#ff4d63;--ok:#34d399;--no:#ff5d6f;
+background:var(--bg);color:var(--tx);min-height:100vh;font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;position:relative;overflow-x:hidden}
+.mfl *{box-sizing:border-box}
+.mfl .top{position:sticky;top:0;z-index:20;background:#0a162b;box-shadow:0 2px 14px #0008}
+.mfl .tk{display:flex;gap:8px;overflow-x:auto;padding:7px 12px;background:#050c1a;font-size:12px;scrollbar-width:none}
+.mfl .tk b{flex:none;background:#ffffff14;border-radius:99px;padding:3px 10px;font-weight:600;color:#dfe8ff}
+.mfl .tk b.lv{background:var(--live);color:#fff}
+.mfl .hd{display:flex;align-items:center;justify-content:space-between;max-width:900px;margin:0 auto;padding:10px 14px 4px}
+.mfl .logo{display:flex;gap:10px;align-items:center;font-weight:800;font-size:19px}
+.mfl .logo i{font-style:normal;background:linear-gradient(135deg,#ffc83d,#ff8a00);color:#0a162b;border-radius:10px;padding:3px 8px;font-weight:900}
+.mfl nav{display:flex;gap:4px;overflow-x:auto;padding:4px 12px 10px;max-width:900px;margin:0 auto;scrollbar-width:none}
+.mfl nav button{flex:none;border:0;background:none;color:#aebcdc;padding:8px 13px;border-radius:99px;font:600 14px inherit;cursor:pointer}
+.mfl nav button.on{background:var(--gold);color:#0a162b}
+.mfl main{max-width:900px;margin:0 auto;padding:14px 12px 60px}
+.mfl h3{font-size:15px;margin:20px 4px 8px;color:var(--mu);font-weight:700;display:flex;justify-content:space-between}
+.mfl h3 a{color:var(--gold);cursor:pointer;font-weight:600}
+.mfl .card{background:var(--card);border:1px solid var(--ln);border-radius:16px;margin-bottom:14px;overflow:hidden}
+.mfl .pd{padding:14px}.mfl .emp{text-align:center;color:var(--mu);padding:26px 14px;margin:0}
+.mfl .note{font-size:12px;color:var(--mu);margin:8px 4px}
+.mfl .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--live);animation:pulse 1.2s infinite}
+.mfl .cr{flex:none;display:inline-grid;place-items:center;width:var(--s,28px);height:var(--s,28px);border-radius:50%;background:linear-gradient(135deg,hsl(var(--h) 70% 52%),hsl(calc(var(--h) + 40) 70% 30%));color:#fff;font-weight:800;font-size:calc(var(--s,28px)*.38);box-shadow:0 0 0 2px #ffffff22 inset}
+.mfl .hero{background:radial-gradient(120% 140% at 85% 0,#1e4fc4 0,#0a162b 62%);border-radius:20px;padding:24px 20px;margin-bottom:14px;position:relative;overflow:hidden}
+.mfl .hero h2{font-size:34px;margin:0 0 6px;letter-spacing:-.5px}.mfl .hero p{margin:0 0 14px;color:#c9d6f5;max-width:440px}
+.mfl .btn{border:0;background:#2b5fd9;color:#fff;font:700 15px inherit;padding:12px 16px;border-radius:12px;cursor:pointer;width:100%;margin-top:10px}
+.mfl .btn.inl{width:auto;margin:0}.mfl .btn.y{background:var(--gold);color:#222}.mfl .btn.r{background:var(--live)}.mfl .btn.k{background:#12a36b}.mfl .btn.g{background:var(--in);color:var(--tx)}
+.mfl .btn:active{transform:scale(.97)}
+.mfl .row{display:flex;gap:8px;align-items:flex-end}.mfl .row>*{flex:1}
+.mfl label{display:block;font-size:12px;color:var(--mu);margin:10px 0 4px;font-weight:600}
+.mfl input,.mfl select,.mfl textarea{width:100%;font:inherit;font-size:16px;padding:10px;border:1px solid var(--ln);border-radius:10px;background:var(--in);color:var(--tx)}
+.mfl input[type=checkbox]{width:auto;margin-right:8px}
+/* canlı skor panosu */
+.mfl .board{background:linear-gradient(160deg,#0a162b,#16397f);border-radius:20px;padding:16px 14px 6px;margin-bottom:14px;position:relative;overflow:hidden;box-shadow:0 8px 30px #0a2a7a55}
+.mfl .board.live{animation:glow 2.4s infinite}
+.mfl .bs{display:flex;justify-content:center;align-items:center;gap:8px;font-size:13px;font-weight:700;margin-bottom:12px}
+.mfl .lt{color:#ff8a98;display:flex;gap:7px;align-items:center}
+.mfl .blink{animation:blink 1s steps(2) infinite}
+.mfl .bar{height:4px;background:#ffffff1f;border-radius:4px;margin:0 6px 14px;overflow:hidden}
+.mfl .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),#ff8a00,var(--gold));background-size:200% 100%;animation:shine 2s linear infinite;transition:width .9s linear}
+.mfl .bm{display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;text-align:center}
+.mfl .bt{display:flex;flex-direction:column;align-items:center;gap:8px;font-weight:700;font-size:14px;transition:transform .4s}
+.mfl .bt.sc{animation:bounce .9s}
+.mfl .num{display:inline-block;min-width:34px;font-size:54px;font-weight:900;line-height:1;font-variant-numeric:tabular-nums}
+.mfl .pop{display:inline-block;animation:pop .7s cubic-bezier(.2,1.6,.4,1)}
+.mfl .sep{opacity:.5;margin:0 4px;font-size:40px}
+.mfl .feed{margin:14px -14px 0;background:#00000033}
+.mfl .ev{display:flex;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid #ffffff12;font-size:14px;animation:slide .5s both}
+.mfl .ev .mn{min-width:34px;font-weight:800;color:var(--gold)}.mfl .ev small{color:var(--mu)}
+.mfl .goal{position:absolute;inset:0;z-index:5;display:grid;place-items:center;text-align:center;background:radial-gradient(circle,#ffc83dee,#ff8a00ee 55%,#0a162bf2);animation:fade 3.2s both}
+.mfl .goal h4{margin:0;font-size:60px;letter-spacing:-1px;color:#0a162b;animation:goalIn .8s both;text-shadow:0 3px 0 #fff6}
+.mfl .goal p{margin:2px 0 0;color:#0a162b;font-weight:800;font-size:18px}
+.mfl .cf{position:absolute;top:0;width:8px;height:14px;border-radius:2px;animation:fall 2.4s linear both}
+/* hareketli puan tablosu */
+.mfl .tw{position:relative;overflow:hidden}
+.mfl .tr{position:absolute;left:0;right:0;height:46px;display:grid;grid-template-columns:30px 1fr 26px 26px 26px 26px 38px 34px 74px;align-items:center;padding:0 10px;gap:2px;font-variant-numeric:tabular-nums;font-size:14px;text-align:center;border-bottom:1px solid var(--ln);transition:transform .8s cubic-bezier(.2,.8,.2,1)}
+.mfl .tr.hh{color:var(--mu);font-size:12px}
+.mfl .tr.r1{background:linear-gradient(90deg,#ffc83d33,transparent 70%);box-shadow:inset 4px 0 #ffc83d}
+.mfl .tr.r2{background:linear-gradient(90deg,#c9d3e329,transparent 70%);box-shadow:inset 4px 0 #c9d3e3}
+.mfl .tr.r3{background:linear-gradient(90deg,#d98c4a2e,transparent 70%);box-shadow:inset 4px 0 #d98c4a}
+.mfl .tr.r1>span:first-child{color:#ffc83d;font-weight:900}.mfl .tr.r2>span:first-child{color:#c9d3e3;font-weight:900}.mfl .tr.r3>span:first-child{color:#d98c4a;font-weight:900}
+.mfl .pod{display:flex;align-items:flex-end;justify-content:center;gap:10px;padding:18px 12px 0;background:linear-gradient(#0d1930,#0a162b);border:1px solid var(--ln);border-radius:16px;margin-bottom:14px;overflow:hidden}
+.mfl .pc{flex:1;max-width:170px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;font-size:13px}
+.mfl .pb{width:100%;border-radius:12px 12px 0 0;background:linear-gradient(180deg,var(--c),color-mix(in srgb,var(--c) 40%,#0a162b));display:flex;flex-direction:column;align-items:center;padding-top:8px;transform-origin:bottom;animation:grow .9s cubic-bezier(.2,.9,.3,1) both;color:#0a162b;font-weight:900}
+.mfl .pb span{font-size:30px;line-height:1}.mfl .pb small{font-weight:700}
+.mfl .crown{font-size:26px;animation:crown 1.6s ease-in-out infinite}
+.mfl .star{display:flex;align-items:center;gap:14px;background:linear-gradient(120deg,#16397f,#0d1930)}
+.mfl .star small{display:block;color:#aebcdc}.mfl .star .sn{margin-left:auto;font-weight:800;color:var(--gold);text-align:right}
+.mfl .ret{background:#ff4d6322;color:#ff8a98;border-radius:99px;padding:3px 10px;font-size:12px;font-weight:700}
+.mfl .tr .nm{display:flex;gap:8px;align-items:center;font-weight:700;text-align:left;min-width:0}.mfl .tr .nm span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mfl .up{color:var(--ok);font-size:10px}.mfl .dn{color:var(--no);font-size:10px}
+.mfl .fm{display:inline-flex;gap:3px;justify-content:center}.mfl .fm i{width:13px;height:13px;border-radius:50%;font:700 8px/13px system-ui;font-style:normal;color:#fff}
+.mfl .fm .G{background:#12a36b}.mfl .fm .B{background:#8d9bb8}.mfl .fm .M{background:var(--no)}
+@media(max-width:560px){.mfl .tr{grid-template-columns:26px 1fr 22px 22px 22px 22px 34px 30px}.mfl .tr>:nth-child(9){display:none}}
+/* maç satırı ve listeler */
+.mfl .mw{padding:12px 14px;border-bottom:1px solid var(--ln);cursor:pointer}.mfl .mw:last-child{border:0}
+.mfl .mt{display:flex;justify-content:space-between;font-size:12px;color:var(--mu);margin-bottom:8px}
+.mfl .m{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center}
+.mfl .tm{display:flex;gap:8px;align-items:center;font-weight:700;min-width:0}.mfl .tm.r{flex-direction:row-reverse;text-align:right}
+.mfl .s2{min-width:60px;text-align:center;background:var(--in);border-radius:10px;padding:5px 10px;color:var(--mu);font-weight:800}
+.mfl .s2.pl{color:var(--tx);font-size:18px}.mfl .s2.lv{background:var(--live);color:#fff;font-size:18px}
+.mfl .lb{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--ln)}.mfl .lb:last-child{border:0}
+.mfl .lb .t{flex:1}.mfl .lb .t small{display:block;color:var(--mu)}.mfl .lb>b{font-size:18px}
+.mfl .g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.mfl .er{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--ln);font-size:14px}
+.mfl .x{border:0;background:none;color:var(--no);font-size:18px;cursor:pointer}
+.mfl .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:10px 16px;border-radius:99px;font-weight:700;z-index:50;animation:slide .3s both}
+.mfl .ts{overflow-x:auto}.mfl .ts table{border-collapse:collapse;width:100%;min-width:760px;font-size:13px;font-variant-numeric:tabular-nums;text-align:center}
+.mfl .ts th{color:var(--mu);font-size:11px;font-weight:700;padding:10px 6px;border-bottom:1px solid var(--ln);white-space:nowrap}
+.mfl .ts td{padding:9px 6px;border-bottom:1px solid var(--ln)}.mfl .ts tr:last-child td{border:0}
+.mfl .ts th:first-child,.mfl .ts td:first-child{text-align:left;position:sticky;left:0;background:var(--card);padding-left:10px;min-width:130px}
+.mfl .ts td:first-child{font-weight:700}.mfl .ts .tn{display:flex;gap:8px;align-items:center}
+.mfl .ts .hi{color:var(--gold);font-weight:800}
+.mfl .card.ov{overflow:visible}
+.mfl .pk{position:relative}.mfl .pl{position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:15;max-height:220px;overflow-y:auto;background:var(--in);border:1px solid var(--ln);border-radius:10px;box-shadow:0 10px 30px #000a}
+.mfl .po{padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--ln)}.mfl .po:last-child{border:0}.mfl .po:hover,.mfl .po.on{background:#2b5fd9}.mfl .po.mu{color:var(--mu);cursor:default;background:none}
+.mfl .lg{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--mu);margin:8px 4px 14px}.mfl .lg b{color:var(--tx);font-weight:700}.mfl .lg .rl{flex-basis:100%;color:var(--gold)}
+.mfl .ts .gh th{padding:9px 6px 3px;border-bottom:0;color:var(--gold);font-size:10px;letter-spacing:.6px;text-transform:uppercase}
+.mfl .ts .gl{border-left:1px solid var(--ln)}.mfl .ts.dn td,.mfl .ts.dn th{padding-left:5px;padding-right:5px}
+@keyframes pulse{50%{opacity:.2;transform:scale(.7)}}
+@keyframes blink{50%{opacity:0}}
+@keyframes shine{to{background-position:-200% 0}}
+@keyframes pop{0%{transform:scale(.3);opacity:0}60%{transform:scale(1.5)}100%{transform:scale(1);opacity:1}}
+@keyframes slide{from{opacity:0;transform:translateX(-22px)}to{opacity:1;transform:none}}
+@keyframes glow{50%{box-shadow:0 8px 40px #ff4d6377}}
+@keyframes bounce{0%,100%{transform:none}30%{transform:translateY(-14px) scale(1.12)}60%{transform:translateY(0) scale(.96)}}
+@keyframes goalIn{0%{transform:scale(.2) rotate(-10deg);opacity:0}55%{transform:scale(1.18) rotate(3deg);opacity:1}100%{transform:scale(1)}}
+@keyframes fade{0%{opacity:0}10%,80%{opacity:1}100%{opacity:0}}
+@keyframes fall{from{transform:translateY(-20px) rotate(0);opacity:1}to{transform:translateY(420px) rotate(600deg);opacity:0}}
+@keyframes grow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes crown{50%{transform:translateY(-7px) rotate(7deg)}}
+@media(prefers-reduced-motion:reduce){.mfl *{animation:none!important;transition:none!important}}
+`;
+/* ---------- yardımcılar ---------- */
+const IC = { G: "⚽", OG: "⚽", Y: "🟨", R: "🟥" };
+const tr = (s) => String(s).toLocaleUpperCase("tr");
+const sc = (m) => { let h = 0, a = 0; (m.events || []).forEach((e) => { if (e.k === "G" || e.k === "OG")
+    e.team === m.home ? h++ : a++; }); return { h, a }; };
+const sortM = (ms) => [...ms].sort((a, b) => a.week - b.week || a.id.localeCompare(b.id));
+const minOf = (m, now) => (m.startedAt ? Math.floor((now - m.startedAt) / 60000) + 1 : "");
+function stand(teams, matches, flt) {
+    const o = {};
+    teams.forEach((t) => (o[t.id] = { id: t.id, o: 0, g: 0, b: 0, m: 0, ag: 0, yg: 0, p: 0, f: [] }));
+    sortM(matches).forEach((x) => {
+        if (x.status === "sched" || (flt && !flt(x)))
+            return;
+        const g = sc(x), h = o[x.home], a = o[x.away];
+        if (!h || !a)
+            return;
+        h.o++;
+        a.o++;
+        h.ag += g.h;
+        h.yg += g.a;
+        a.ag += g.a;
+        a.yg += g.h;
+        const r = g.h > g.a ? "GM" : g.h < g.a ? "MG" : "BB";
+        [[h, r[0]], [a, r[1]]].forEach(([t, k]) => { t.p += k === "G" ? 3 : k === "B" ? 1 : 0; t[k.toLowerCase()]++; if (x.status === "done")
+            t.f.push(k); });
+    });
+    const nm = (id) => teams.find((t) => t.id === id)?.name || "";
+    return Object.values(o).sort((a, b) => b.p - a.p || b.ag - b.yg - (a.ag - a.yg) || b.ag - a.ag || nm(a.id).localeCompare(nm(b.id), "tr"));
+}
+function stats(matches) {
+    const G = {}, A = {};
+    let tg = 0;
+    matches.forEach((m) => m.status !== "sched" && (m.events || []).forEach((e) => {
+        if (e.k === "G" || e.k === "OG")
+            tg++;
+        if (e.k !== "G")
+            return;
+        [[G, e.player], [A, e.assist]].forEach(([M, n]) => { n = (n || "").trim(); if (n) {
+            const k = e.team + "|" + n.toLowerCase();
+            (M[k] = M[k] || { n, t: e.team, c: 0 }).c++;
+        } });
+    }));
+    const so = (M) => Object.values(M).sort((a, b) => b.c - a.c || a.n.localeCompare(b.n, "tr"));
+    return { G: so(G), A: so(A), tg };
+}
+function roundRobin(ids) {
+    const a = [...ids];
+    if (a.length % 2)
+        a.push(null);
+    const n = a.length, R = [];
+    for (let r = 0; r < n - 1; r++) {
+        const ps = [];
+        for (let i = 0; i < n / 2; i++) {
+            const h = a[i], v = a[n - 1 - i];
+            if (h && v)
+                ps.push((r + i) % 2 ? [v, h] : [h, v]);
+        }
+        R.push(ps);
+        a.splice(1, 0, a.pop());
+    }
+    return R;
+}
+function useNow() { const [n, s] = useState(Date.now()); useEffect(() => { const i = setInterval(() => s(Date.now()), 1000); return () => clearInterval(i); }, []); return n; }
+/* ---------- bileşenler ---------- */
+const Cr = ({ t, s = 28 }) => t ? React.createElement("span", { className: "cr", style: { "--s": s + "px", "--h": t.hue } }, tr(t.name.split(/\s+/).map((x) => x[0]).join("").slice(0, 2))) : null;
+function Feed({ m, T }) {
+    const ev = [...(m.events || [])].sort((a, b) => (+b.min || 0) - (+a.min || 0) || (b.ts || 0) - (a.ts || 0));
+    if (!ev.length)
+        return React.createElement("p", { className: "emp", style: { padding: 16 } }, "Hen\u00FCz olay yok.");
+    return ev.map((e) => (React.createElement("div", { className: "ev", key: e.ts + e.k + e.player },
+        React.createElement("span", { className: "mn" },
+            e.min,
+            "\u2019"),
+        React.createElement("span", null, IC[e.k]),
+        React.createElement("div", { style: { flex: 1 } },
+            React.createElement("b", null, e.player || "Gol"),
+            e.k === "OG" ? " (K.K.)" : "",
+            e.assist ? React.createElement("small", null,
+                " asist ",
+                e.assist) : null),
+        React.createElement(Cr, { t: T[e.team], s: 22 }))));
+}
+/* Canlı maç panosu: skor değişince gol kutlaması, sayaç, ilerleme çubuğu */
+function Board({ m, T, min, total = 90, onClick }) {
+    const g = sc(m), ev = m.events || [], live = m.status === "live";
+    const [burst, setBurst] = useState(null), [scored, setScored] = useState(null);
+    const prev = useRef(ev.length);
+    useEffect(() => {
+        if (ev.length > prev.current) {
+            const e = ev[ev.length - 1];
+            if (e.k === "G" || e.k === "OG") {
+                setBurst({ ...e, key: Date.now() });
+                setScored(e.team);
+                setTimeout(() => setBurst(null), 3200);
+                setTimeout(() => setScored(null), 1000);
+            }
+        }
+        prev.current = ev.length;
+    }, [ev.length]);
+    const cf = useMemo(() => Array.from({ length: 26 }, (_, i) => ({ l: Math.random() * 100, d: Math.random() * 0.8, c: ["#ffc83d", "#ff4d63", "#fff", "#5c8dff", "#34d399"][i % 5] })), [burst?.key]);
+    return (React.createElement("div", { className: "board " + (live ? "live" : ""), onClick: onClick, style: onClick ? { cursor: "pointer" } : null },
+        React.createElement("div", { className: "bs" }, live ? React.createElement("span", { className: "lt" },
+            React.createElement("i", { className: "dot" }),
+            "Canl\u0131",
+            min ? React.createElement(React.Fragment, null,
+                " ",
+                React.createElement("span", null,
+                    min,
+                    React.createElement("span", { className: "blink" }, "\u2019"))) : null) : React.createElement("span", { style: { color: "#aebcdc" } }, m.status === "done" ? "Maç bitti" : "Başlamadı")),
+        live && min ? React.createElement("div", { className: "bar" },
+            React.createElement("i", { style: { width: Math.min(100, (min / total) * 100) + "%" } })) : null,
+        React.createElement("div", { className: "bm" },
+            React.createElement("div", { className: "bt " + (scored === m.home ? "sc" : "") },
+                React.createElement(Cr, { t: T[m.home], s: 54 }),
+                T[m.home]?.name),
+            React.createElement("div", null,
+                React.createElement("span", { className: "num" },
+                    React.createElement("span", { className: "pop", key: g.h }, g.h)),
+                React.createElement("span", { className: "sep" }, "-"),
+                React.createElement("span", { className: "num" },
+                    React.createElement("span", { className: "pop", key: g.a }, g.a))),
+            React.createElement("div", { className: "bt " + (scored === m.away ? "sc" : "") },
+                React.createElement(Cr, { t: T[m.away], s: 54 }),
+                T[m.away]?.name)),
+        React.createElement("div", { className: "feed" },
+            React.createElement(Feed, { m: m, T: T })),
+        burst ? (React.createElement("div", { className: "goal", key: burst.key },
+            cf.map((c, i) => React.createElement("span", { key: i, className: "cf", style: { left: c.l + "%", background: c.c, animationDelay: c.d + "s" } })),
+            React.createElement("div", null,
+                React.createElement("h4", null, "GOOOL!"),
+                React.createElement("p", null,
+                    burst.player || T[burst.team]?.name,
+                    burst.k === "OG" ? " (K.K.)" : ""),
+                React.createElement("p", { style: { fontWeight: 600, opacity: .8 } }, T[burst.team]?.name)))) : null));
+}
+/* Puan tablosu: sıra değişince satırlar kayarak yer değiştirir */
+function Table({ rows, T, prevRank, full }) {
+    const H = 46;
+    return (React.createElement("div", { className: "card tw", style: { height: (rows.length + 1) * H } },
+        React.createElement("div", { className: "tr hh", style: { transform: "translateY(0)" } },
+            React.createElement("span", null, "#"),
+            React.createElement("span", { style: { textAlign: "left" } }, "Tak\u0131m"),
+            React.createElement("span", null, "O"),
+            React.createElement("span", null, "G"),
+            React.createElement("span", null, "B"),
+            React.createElement("span", null, "M"),
+            React.createElement("span", null, "AV"),
+            React.createElement("span", null, "P"),
+            React.createElement("span", null, "Form")),
+        rows.map((r, i) => {
+            const d = prevRank[r.id] ? prevRank[r.id] - (i + 1) : 0, av = r.ag - r.yg;
+            return (React.createElement("div", { key: r.id, className: "tr " + (i < 3 ? "r" + (i + 1) : ""), style: { transform: `translateY(${(i + 1) * H}px)` } },
+                React.createElement("span", null,
+                    i + 1,
+                    d ? React.createElement(React.Fragment, null,
+                        React.createElement("br", null),
+                        React.createElement("span", { className: d > 0 ? "up" : "dn" },
+                            d > 0 ? "▲" : "▼",
+                            Math.abs(d))) : null),
+                React.createElement("span", { className: "nm" },
+                    React.createElement(Cr, { t: T[r.id], s: 26 }),
+                    React.createElement("span", null, T[r.id]?.name)),
+                React.createElement("span", null, r.o),
+                React.createElement("span", null, r.g),
+                React.createElement("span", null, r.b),
+                React.createElement("span", null, r.m),
+                React.createElement("span", null,
+                    av > 0 ? "+" : "",
+                    av),
+                React.createElement("b", { key: r.p, className: "pop" }, r.p),
+                React.createElement("span", { className: "fm" }, r.f.slice(-5).map((x, j) => React.createElement("i", { key: j, className: x }, x)))));
+        })));
+}
+const Leaders = ({ L, T, n }) => (React.createElement("div", { className: "card" },
+    L.slice(0, n).map((p, i) => (React.createElement("div", { className: "lb", key: p.t + p.n },
+        React.createElement("span", { style: { width: 18, color: "var(--mu)", fontWeight: 700 } }, i + 1),
+        React.createElement(Cr, { t: T[p.t], s: 30 }),
+        React.createElement("div", { className: "t" },
+            React.createElement("b", null, p.n),
+            React.createElement("small", null, T[p.t]?.name)),
+        React.createElement("b", null, p.c)))),
+    !L.length ? React.createElement("p", { className: "emp" }, "Hen\u00FCz veri yok.") : null));
+function Podium({ rows, T }) {
+    const C = ["#ffc83d", "#c9d3e3", "#d98c4a"], Hh = [150, 112, 86];
+    return (React.createElement("div", { className: "pod" }, [1, 0, 2].map((i) => {
+        const r = rows[i];
+        return (React.createElement("div", { className: "pc", key: r.id },
+            i === 0 ? React.createElement("div", { className: "crown" }, "\uD83D\uDC51") : null,
+            React.createElement(Cr, { t: T[r.id], s: i === 0 ? 52 : 42 }),
+            React.createElement("b", null, T[r.id]?.name),
+            React.createElement("div", { className: "pb", style: { height: Hh[i], "--c": C[i], animationDelay: i * 0.25 + "s" } },
+                React.createElement("span", null, r.p),
+                React.createElement("small", null, "puan"))));
+    })));
+}
+function Row({ m, T, now, onOpen }) {
+    const g = sc(m), on = m.status !== "sched";
+    return (React.createElement("div", { className: "mw", onClick: () => onOpen(m.id) },
+        React.createElement("div", { className: "mt" },
+            React.createElement("span", null,
+                m.week,
+                ". Hafta"),
+            m.status === "live" ? React.createElement("span", { style: { color: "var(--live)", fontWeight: 800 } },
+                "\u25CF Canl\u0131 ",
+                minOf(m, now),
+                m.startedAt ? "’" : "") : React.createElement("span", null, m.status === "done" ? "Bitti" : "Oynanmadı")),
+        React.createElement("div", { className: "m" },
+            React.createElement("div", { className: "tm" },
+                React.createElement(Cr, { t: T[m.home] }),
+                T[m.home]?.name),
+            React.createElement("div", { className: "s2 " + (m.status === "live" ? "lv" : on ? "pl" : "") }, on ? g.h + " - " + g.a : "v"),
+            React.createElement("div", { className: "tm r" },
+                React.createElement(Cr, { t: T[m.away] }),
+                T[m.away]?.name))));
+}
+const Legend = ({ items, rule }) => React.createElement("div", { className: "lg" },
+    items.map(([a, b]) => React.createElement("span", { key: a },
+        React.createElement("b", null, a),
+        " ",
+        b)),
+    rule ? React.createElement("span", { className: "rl" }, rule) : null);
+/* Kadrodan oyuncu seçici: tıklayınca seçilir, yazarak süzülür, kadro dışı isim kabul edilmez */
+function Pick({ value, onChange, options, placeholder }) {
+    const [open, setOpen] = useState(false);
+    const q = (value || "").trim().toLocaleLowerCase("tr"), exact = options.find((o) => o.toLocaleLowerCase("tr") === q);
+    const list = exact ? options : options.filter((o) => o.toLocaleLowerCase("tr").includes(q));
+    return (React.createElement("div", { className: "pk" },
+        React.createElement("input", { value: value || "", placeholder: placeholder, autoComplete: "off", style: value && !exact ? { borderColor: "var(--no)" } : null, onFocus: () => setOpen(true), onChange: (e) => { onChange(e.target.value); setOpen(true); }, onBlur: () => { setOpen(false); if (exact && exact !== value)
+                onChange(exact); } }),
+        open ? React.createElement("div", { className: "pl" }, list.length ? list.map((o) => React.createElement("div", { key: o, className: "po" + (o === value ? " on" : ""), onMouseDown: (e) => { e.preventDefault(); onChange(o); setOpen(false); } }, o)) : React.createElement("div", { className: "po mu" }, options.length ? "Kadroda eşleşen oyuncu yok" : "Önce Kadro sekmesinden oyuncu ekleyin")) : null));
+}
+/* ---------- uygulama ---------- */
+function App() {
+    const [d, setD] = useState({ teams: [], matches: [] });
+    const [ok, setOk] = useState(false), [tab, setTab] = useState("home"), [mid, setMid] = useState(null), [sel, setSel] = useState(null);
+    const [f, setF] = useState({}), [inj, setInj] = useState({}), [sq, setSq] = useState({}), [tn, setTn] = useState(null), [dbl, setDbl] = useState(false), [cf, setCf] = useState(false), [msg, setMsg] = useState("");
+    const now = useNow();
+    const auth = window.MFL_AUTH;
+    const [unlocked, setUnlocked] = useState(!auth), [A, setA] = useState({ exists: null, canSet: false }), [p1, setP1] = useState(""), [p2, setP2] = useState("");
+    const say = (t) => { setMsg(t); setTimeout(() => setMsg(""), 2200); };
+    useEffect(() => { if (auth)
+        auth.status().then((x) => { setA(x); setUnlocked(x.unlocked); }); }, []);
+    const doUnlock = async () => { if (await auth.unlock(p1)) {
+        setUnlocked(true);
+        setP1("");
+        say("Hakem girişi yapıldı");
+    }
+    else
+        say("Şifre yanlış"); };
+    const doSet = async () => {
+        if (p1.length < 4)
+            return say("Şifre en az 4 karakter olmalı");
+        if (p1 !== p2)
+            return say("İki şifre aynı değil");
+        if (await auth.set(p1)) {
+            setA(await auth.status());
+            setUnlocked(true);
+            setP1("");
+            setP2("");
+            say("Şifre kaydedildi");
+        }
+        else
+            say("Şifre kaydedilemedi, bunun için düzenleme yetkisi gerekir");
+    };
+    const doLock = () => { auth.lock(); setUnlocked(false); setTab("home"); };
+    useEffect(() => { store.get().then((v) => { if (v)
+        setD(v); setOk(true); }); }, []);
+    useEffect(() => { if (ok)
+        store.set(d); }, [d, ok]);
+    const T = useMemo(() => ({ ...Object.fromEntries(d.teams.map((t, i) => [t.id, { ...t, hue: (i * 47) % 360 }])) }), [d.teams]);
+    const ms = useMemo(() => sortM(d.matches), [d.matches]);
+    const rows = useMemo(() => stand(d.teams, d.matches), [d]);
+    const prevRank = useMemo(() => {
+        const st = d.matches.filter((m) => m.status !== "sched"), lw = st.length ? Math.max(...st.map((m) => m.week)) : 0, o = {};
+        if (lw > 1) {
+            const P = stand(d.teams, d.matches, (x) => x.week < lw);
+            if (P.some((r) => r.o))
+                P.forEach((r, i) => (o[r.id] = i + 1));
+        }
+        return o;
+    }, [d]);
+    const k = useMemo(() => stats(d.matches), [d.matches]);
+    const ta = useMemo(() => {
+        const A = {};
+        d.matches.forEach((m) => m.status !== "sched" && (m.events || []).forEach((e) => { if (e.k === "G" && (e.assist || "").trim())
+            A[e.team] = (A[e.team] || 0) + 1; }));
+        return rows.map((r) => {
+            const o = r.o, f = (x) => (o ? (x / o).toFixed(2) : "–"), pc = (x) => (o ? Math.round((x / o) * 100) + "%" : "–");
+            return { id: r.id, av: (r.ag - r.yg > 0 ? "+" : "") + (r.ag - r.yg), o, g: r.g, b: r.b, m: r.m, ag: r.ag, yg: r.yg, as: A[r.id] || 0, p: r.p, gm: f(r.ag), ym: f(r.yg), am: f(A[r.id] || 0), pm: f(r.p), gp: pc(r.g), bp: pc(r.b), mp: pc(r.m) };
+        });
+    }, [d.matches, rows]);
+    const star = useMemo(() => {
+        const st = d.matches.filter((m) => m.status !== "sched" && (m.events || []).length), lw = st.length ? Math.max(...st.map((m) => m.week)) : 0, Q = {};
+        st.filter((m) => m.week === lw).forEach((m) => (m.events || []).forEach((e) => {
+            if (e.k !== "G")
+                return;
+            [[e.player, "g"], [e.assist, "a"]].forEach(([n, key]) => { n = (n || "").trim(); if (!n)
+                return; const k2 = e.team + "|" + n.toLowerCase(), p = (Q[k2] = Q[k2] || { n, t: e.team, g: 0, a: 0, w: lw }); p[key]++; });
+        }));
+        return Object.values(Q).sort((a, b) => b.g * 2 + b.a - (a.g * 2 + a.a))[0] || null;
+    }, [d.matches]);
+    const cur = ms.find((m) => m.id === sel);
+    const patch = (id, fn) => setD((s) => ({ ...s, matches: s.matches.map((m) => (m.id === id ? fn(m) : m)) }));
+    const setSt = (m, s) => { patch(m.id, (x) => ({ ...x, status: s, startedAt: s === "live" && x.status === "sched" ? Date.now() : x.startedAt })); say(s === "live" ? "Maç canlı" : "Maç bitti"); };
+    const addEv = (m, kind) => {
+        const team = f.team === m.home || f.team === m.away ? f.team : m.home;
+        const sqd = squadOf(team), find = (n) => sqd.find((x) => x.toLocaleLowerCase("tr") === (n || "").trim().toLocaleLowerCase("tr"));
+        if (!sqd.length)
+            return say("Önce Kadro sekmesinden " + (T[team]?.name || "takım") + " oyuncularını ekleyin");
+        const player = find(f.player);
+        if (!player)
+            return say("Oyuncu, seçili takımın kadrosundan seçilmeli");
+        const ev = { k: kind, team, player, min: String(f.min != null && f.min !== "" ? f.min : minOf(m, now)), ts: Date.now() };
+        if (kind === "G") {
+            if (f.og) {
+                ev.k = "OG";
+                ev.ptm = team;
+                ev.team = team === m.home ? m.away : m.home;
+            }
+            else if ((f.assist || "").trim()) {
+                const a = find(f.assist);
+                if (!a)
+                    return say("Asist yapan, kadrodan seçilmeli");
+                if (a === player)
+                    return say("Golü atan oyuncu asist yapamaz");
+                ev.assist = a;
+            }
+        }
+        patch(m.id, (x) => ({ ...x, status: x.status === "sched" ? "live" : x.status, events: [...(x.events || []), ev] }));
+        setF({ team });
+        say(kind === "G" ? "Gol eklendi" : "Kart eklendi");
+    };
+    const build = () => {
+        const seen = new Set(), L = (tn == null ? d.teams.map((t) => t.name + (t.cls ? "|" + t.cls : "")) : tn.split("\n")).map((s) => s.split("|").map((x) => x.trim())).filter((p) => p[0] && !seen.has(p[0].toLowerCase()) && seen.add(p[0].toLowerCase()));
+        if (L.length < 2)
+            return say("En az 2 takım girin");
+        if (d.matches.length && !cf) {
+            setCf(true);
+            setTimeout(() => setCf(false), 5000);
+            return;
+        }
+        setCf(false);
+        const ids = L.map((_, i) => "t" + (i + 1)), R = roundRobin(ids), M = [];
+        R.forEach((ps, r) => ps.forEach((p) => M.push({ week: r + 1, home: p[0], away: p[1] })));
+        if (dbl)
+            R.forEach((ps, r) => ps.forEach((p) => M.push({ week: r + 1 + R.length, home: p[1], away: p[0] })));
+        const oldN = {};
+        d.teams.forEach((t) => (oldN[t.id] = t.name.toLowerCase()));
+        const newId = {};
+        L.forEach((p, i) => (newId[p[0].toLowerCase()] = ids[i]));
+        const keep = (arr) => (arr || []).map((x) => ({ ...x, team: newId[oldN[x.team]], prev: undefined })).filter((x) => x.team);
+        setD({ teams: L.map((p, i) => ({ id: ids[i], name: p[0], cls: p[1] || "", order: i })), matches: M.map((x, i) => ({ ...x, id: "m" + String(i).padStart(3, "0"), status: "sched", events: [] })), players: keep(d.players), injuries: keep(d.injuries) });
+        setTn(null);
+        setTab("fix");
+        say("Fikstür hazır: " + M.length + " maç");
+    };
+    const open = (id) => { setMid(id); setTab("match"); window.scrollTo?.(0, 0); };
+    const squadOf = (t) => (d.players || []).filter((p) => p.team === t).map((p) => p.name).sort((a, b) => a.localeCompare(b, "tr"));
+    const live = ms.filter((m) => m.status === "live"), next = ms.find((m) => m.status === "sched");
+    const ticker = ms.filter((m) => m.status !== "sched").reverse().slice(0, 10);
+    const tabs = [["home", "Ana sayfa"], ["table", "Puan durumu"], ["fix", "Fikstür"], ["stats", "İstatistikler"], ["squad", "Kadro"], ["injury", "Sakatlıklar"], ...(unlocked ? [["ref", "Hakem"], ["admin", "Yönetim"]] : []), ...(auth ? [["login", unlocked ? "🔓 Hakem girişi yapıldı" : "🔒 Hakem girişi"]] : [])];
+    const empty = React.createElement("div", { className: "card" },
+        React.createElement("p", { className: "emp" }, unlocked ? "Lig henüz kurulmadı. Yönetim sekmesinden takımları ekleyin." : "Lig henüz kurulmadı. Yönetici girişi yapıp takımları ekleyin."));
+    const ref = () => {
+        if (!ms.length)
+            return React.createElement("div", { className: "card" },
+                React.createElement("p", { className: "emp" }, "\u00D6nce Y\u00F6netim sekmesinden fikst\u00FCr\u00FC olu\u015Fturun."));
+        const m = cur || ms.find((x) => x.status === "live") || ms.find((x) => x.status === "sched") || ms[0], g = sc(m), team = f.team === m.home || f.team === m.away ? f.team : m.home;
+        return (React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "card pd" },
+                React.createElement("select", { value: m.id, onChange: (e) => { setSel(e.target.value); setF({}); } }, ms.map((x) => React.createElement("option", { key: x.id, value: x.id },
+                    x.week,
+                    ". Hf: ",
+                    T[x.home]?.name,
+                    " - ",
+                    T[x.away]?.name,
+                    x.status === "live" ? " (canlı)" : ""))),
+                React.createElement("p", { style: { fontSize: 22, fontWeight: 800, textAlign: "center", margin: "12px 0 0" } },
+                    T[m.home]?.name,
+                    " ",
+                    g.h,
+                    " - ",
+                    g.a,
+                    " ",
+                    T[m.away]?.name),
+                m.status === "sched" ? React.createElement("button", { className: "btn k", onClick: () => setSt(m, "live") }, "\u25B6 Ma\u00E7\u0131 ba\u015Flat") : m.status === "live" ? React.createElement("button", { className: "btn r", onClick: () => setSt(m, "done") }, "\u23F9 Ma\u00E7\u0131 bitir") : React.createElement("button", { className: "btn g", onClick: () => setSt(m, "live") }, "\u21A9 Yeniden a\u00E7")),
+            React.createElement("div", { className: "card pd ov" },
+                React.createElement("label", null, "Tak\u0131m"),
+                React.createElement("select", { value: team, onChange: (e) => setF({ ...f, team: e.target.value, player: "", assist: "" }) },
+                    React.createElement("option", { value: m.home }, T[m.home]?.name),
+                    React.createElement("option", { value: m.away }, T[m.away]?.name)),
+                React.createElement("div", { className: "row" },
+                    React.createElement("div", null,
+                        React.createElement("label", null, "Oyuncu"),
+                        React.createElement(Pick, { value: f.player || "", onChange: (v) => setF({ ...f, team, player: v }), options: squadOf(team), placeholder: "Oyuncu se\u00E7 veya yaz" })),
+                    React.createElement("div", { style: { flex: 0.45 } },
+                        React.createElement("label", null, "Dakika"),
+                        React.createElement("input", { type: "number", inputMode: "numeric", value: f.min != null ? f.min : minOf(m, now), onChange: (e) => setF({ ...f, team, min: e.target.value }) }))),
+                React.createElement("label", null, "Asist (sadece gol i\u00E7in)"),
+                React.createElement(Pick, { value: f.assist || "", onChange: (v) => setF({ ...f, team, assist: v }), options: squadOf(team).filter((n) => n !== f.player), placeholder: "Asist yapan (iste\u011Fe ba\u011Fl\u0131)" }),
+                React.createElement("label", null,
+                    React.createElement("input", { type: "checkbox", checked: !!f.og, onChange: (e) => setF({ ...f, team, og: e.target.checked }) }),
+                    "Kendi kalesine: se\u00E7ili tak\u0131m\u0131n oyuncusu att\u0131, gol rakibe yaz\u0131l\u0131r"),
+                React.createElement("button", { className: "btn k", onClick: () => addEv(m, "G") }, "\u26BD Gol ekle"),
+                React.createElement("div", { className: "row" },
+                    React.createElement("button", { className: "btn y", onClick: () => addEv(m, "Y") }, "\uD83D\uDFE8 Sar\u0131 kart"),
+                    React.createElement("button", { className: "btn r", onClick: () => addEv(m, "R") }, "\uD83D\uDFE5 K\u0131rm\u0131z\u0131 kart")),
+                (m.events || []).map((e, i) => React.createElement("div", { className: "er", key: e.ts + i },
+                    React.createElement("span", null,
+                        IC[e.k],
+                        " ",
+                        e.player || "Gol",
+                        e.k === "OG" ? " (K.K.)" : "",
+                        e.assist ? " · asist " + e.assist : "",
+                        " \u00B7 ",
+                        T[e.team]?.name,
+                        " \u00B7 ",
+                        e.min,
+                        "\u2019"),
+                    React.createElement("button", { className: "x", "aria-label": "Sil", onClick: () => patch(m.id, (x) => ({ ...x, events: x.events.filter((_, j) => j !== i) })) }, "\u2715"))))));
+    };
+    const addInj = () => {
+        const player = (inj.player || "").trim(), team = inj.team || d.teams[0]?.id;
+        if (!team)
+            return say("Önce takım ekleyin");
+        if (!player)
+            return say("Oyuncu adını girin");
+        setD((s) => ({ ...s, injuries: [...(s.injuries || []), { id: Date.now(), team, player, note: (inj.note || "").trim(), ret: (inj.ret || "").trim() }] }));
+        setInj({ team });
+        say("Sakatlık eklendi");
+    };
+    const injView = () => {
+        const L = d.injuries || [], by = {};
+        L.forEach((x) => (by[x.team] = by[x.team] || []).push(x));
+        return (React.createElement(React.Fragment, null,
+            unlocked ? React.createElement("div", { className: "card pd" },
+                React.createElement("label", null, "Tak\u0131m"),
+                React.createElement("select", { value: inj.team || d.teams[0]?.id || "", onChange: (e) => setInj({ ...inj, team: e.target.value }) }, d.teams.map((t) => React.createElement("option", { key: t.id, value: t.id }, t.name))),
+                React.createElement("div", { className: "row" },
+                    React.createElement("div", null,
+                        React.createElement("label", null, "Oyuncu"),
+                        React.createElement("input", { value: inj.player || "", onChange: (e) => setInj({ ...inj, player: e.target.value }), placeholder: "Ad Soyad" })),
+                    React.createElement("div", null,
+                        React.createElement("label", null, "Sakatl\u0131k"),
+                        React.createElement("input", { value: inj.note || "", onChange: (e) => setInj({ ...inj, note: e.target.value }), placeholder: "Ayak bile\u011Fi" }))),
+                React.createElement("label", null, "Tahmini d\u00F6n\u00FC\u015F"),
+                React.createElement("input", { value: inj.ret || "", onChange: (e) => setInj({ ...inj, ret: e.target.value }), placeholder: "2 hafta" }),
+                React.createElement("button", { className: "btn", onClick: addInj }, "Sakatl\u0131k ekle")) : null,
+            L.length ? Object.keys(by).map((tid) => (React.createElement("div", { className: "card", key: tid },
+                React.createElement("div", { className: "lb" },
+                    React.createElement(Cr, { t: T[tid], s: 30 }),
+                    React.createElement("b", { style: { flex: 1 } }, T[tid]?.name),
+                    React.createElement("span", { style: { color: "var(--mu)" } },
+                        by[tid].length,
+                        " sakat")),
+                by[tid].map((x) => (React.createElement("div", { className: "lb", key: x.id },
+                    React.createElement("span", null, "\uD83E\uDE79"),
+                    React.createElement("div", { className: "t" },
+                        React.createElement("b", { style: { fontSize: 15 } }, x.player),
+                        React.createElement("small", null, x.note || "Sakatlık")),
+                    x.ret ? React.createElement("span", { className: "ret" }, x.ret) : null,
+                    unlocked ? React.createElement("button", { className: "x", "aria-label": "Sil", onClick: () => setD((s) => ({ ...s, injuries: s.injuries.filter((y) => y.id !== x.id) })) }, "\u2715") : null)))))) : React.createElement("div", { className: "card" },
+                React.createElement("p", { className: "emp" }, "\u015Eu an sakat oyuncu yok."))));
+    };
+    const addPl = () => {
+        const team = sq.team || d.teams[0]?.id;
+        if (!team)
+            return say("Önce takım ekleyin");
+        const names = (sq.name || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+        if (!names.length)
+            return say("Oyuncu adını girin");
+        const ex = new Set((d.players || []).filter((p) => p.team === team).map((p) => p.name.toLowerCase()));
+        const add = names.filter((n, i) => !ex.has(n.toLowerCase()) && names.findIndex((m) => m.toLowerCase() === n.toLowerCase()) === i);
+        if (!add.length)
+            return say("Bu oyuncu zaten kadroda");
+        setD((s) => ({ ...s, players: [...(s.players || []), ...add.map((name, i) => ({ id: Date.now() + i, team, name }))] }));
+        setSq({ team });
+        say(add.length + " oyuncu eklendi");
+    };
+    const trPl = (x, to) => {
+        if ((d.players || []).some((p) => p.team === to && p.name.toLowerCase() === x.name.toLowerCase()))
+            return say("Bu isimde oyuncu o takımda zaten var");
+        setD((s) => ({ ...s, players: s.players.map((p) => (p.id === x.id ? { ...p, prev: p.team, team: to } : p)) }));
+        say(x.name + " transfer edildi");
+    };
+    const rmPl = (x) => {
+        if (!window.confirm(x.name + " kadrodan çıkarılsın mı?"))
+            return;
+        setD((s) => ({ ...s, players: s.players.filter((p) => p.id !== x.id) }));
+        say("Oyuncu çıkarıldı");
+    };
+    const squadView = () => {
+        if (!d.teams.length)
+            return empty;
+        const by = {};
+        (d.players || []).forEach((x) => (by[x.team] = by[x.team] || []).push(x));
+        return (React.createElement(React.Fragment, null,
+            unlocked ? React.createElement("div", { className: "card pd" },
+                React.createElement("label", null, "Tak\u0131m"),
+                React.createElement("select", { value: sq.team || d.teams[0]?.id || "", onChange: (e) => setSq({ ...sq, team: e.target.value }) }, d.teams.map((t) => React.createElement("option", { key: t.id, value: t.id }, t.name))),
+                React.createElement("label", null, "Oyuncu"),
+                React.createElement("input", { value: sq.name || "", onChange: (e) => setSq({ ...sq, name: e.target.value }), onKeyDown: (e) => e.key === "Enter" && addPl(), placeholder: "Ad Soyad (birden fazla i\u00E7in virg\u00FClle ay\u0131r\u0131n)" }),
+                React.createElement("button", { className: "btn", onClick: addPl }, "Oyuncu ekle")) : null,
+            d.teams.map((t) => {
+                const L = by[t.id] || [];
+                return (React.createElement("div", { className: "card", key: t.id },
+                    React.createElement("div", { className: "lb" },
+                        React.createElement(Cr, { t: T[t.id], s: 30 }),
+                        React.createElement("b", { style: { flex: 1 } },
+                            t.name,
+                            t.cls ? React.createElement("small", { style: { color: "var(--mu)", fontWeight: 600 } },
+                                " \u00B7 ",
+                                t.cls) : null),
+                        React.createElement("span", { style: { color: "var(--mu)" } },
+                            L.length,
+                            " oyuncu")),
+                    L.map((x) => (React.createElement("div", { className: "lb", key: x.id },
+                        React.createElement("span", null, "\uD83D\uDC64"),
+                        React.createElement("div", { className: "t" },
+                            React.createElement("b", { style: { fontSize: 15 } }, x.name),
+                            x.prev && T[x.prev] ? React.createElement("small", null,
+                                T[x.prev].name,
+                                " tak\u0131m\u0131ndan transfer") : null),
+                        unlocked ? React.createElement(React.Fragment, null,
+                            React.createElement("select", { "aria-label": "Transfer", style: { width: 112, fontSize: 14, padding: 6 }, value: "", onChange: (e) => e.target.value && trPl(x, e.target.value) },
+                                React.createElement("option", { value: "" }, "Transfer"),
+                                d.teams.filter((y) => y.id !== t.id).map((y) => React.createElement("option", { key: y.id, value: y.id }, y.name))),
+                            React.createElement("button", { className: "x", "aria-label": "\u00C7\u0131kar", onClick: () => rmPl(x) }, "\u2715")) : null))),
+                    !L.length ? React.createElement("p", { className: "emp", style: { padding: 16 } }, "Kadro bo\u015F.") : null));
+            })));
+    };
+    const pwBox = (again) => React.createElement(React.Fragment, null,
+        React.createElement("label", null, again ? "Yeni şifre" : "Şifre"),
+        React.createElement("input", { type: "password", value: p1, onChange: (e) => setP1(e.target.value) }),
+        React.createElement("label", null, "\u015Eifre tekrar"),
+        React.createElement("input", { type: "password", value: p2, onChange: (e) => setP2(e.target.value) }),
+        React.createElement("button", { className: "btn", onClick: doSet }, "\u015Eifreyi kaydet"));
+    const login = () => (React.createElement("div", { className: "card pd" }, A.exists === null && !unlocked ? React.createElement("p", { className: "emp" }, "Y\u00FCkleniyor\u2026") : unlocked ? React.createElement(React.Fragment, null,
+        React.createElement("p", { style: { margin: 0, fontWeight: 700 } }, "Hakem olarak giri\u015F yapt\u0131n\u0131z."),
+        React.createElement("button", { className: "btn g", onClick: doLock }, "\u00C7\u0131k\u0131\u015F yap"),
+        A.canSet ? React.createElement(React.Fragment, null,
+            React.createElement("h3", { style: { marginTop: 22 } }, "\u015Eifreyi de\u011Fi\u015Ftir"),
+            pwBox(true)) : null) : A.exists === false ? (A.canSet ? React.createElement(React.Fragment, null,
+        React.createElement("p", { style: { margin: 0 } }, "\u0130lk kurulum: y\u00F6netici \u015Fifresi belirleyin. Bu \u015Fifreyi girenler her \u015Feyi y\u00F6netebilir."),
+        pwBox(false)) : React.createElement("p", { className: "emp" }, "Y\u00F6netici \u015Fifresi hen\u00FCz belirlenmedi. Sayfan\u0131n sahibi \u00F6nce \u015Fifreyi olu\u015Fturmal\u0131.")) : React.createElement(React.Fragment, null,
+        React.createElement("label", null, "Hakem \u015Fifresi"),
+        React.createElement("input", { type: "password", value: p1, onChange: (e) => setP1(e.target.value), onKeyDown: (e) => e.key === "Enter" && doUnlock() }),
+        React.createElement("button", { className: "btn", onClick: doUnlock }, "Giri\u015F yap"))));
+    const views = {
+        home: () => (React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "hero" },
+                React.createElement("h2", null, "MFL League"),
+                React.createElement("p", null, "Canl\u0131 skor, puan durumu, fikst\u00FCr ve istatistikler tek adreste.")),
+            rows.length > 2 && rows[0].o > 0 ? React.createElement(React.Fragment, null,
+                React.createElement("h3", null, "Liderlik"),
+                React.createElement(Podium, { rows: rows, T: T })) : null,
+            star ? React.createElement(React.Fragment, null,
+                React.createElement("h3", null, "Haftan\u0131n y\u0131ld\u0131z\u0131"),
+                React.createElement("div", { className: "card pd star" },
+                    React.createElement(Cr, { t: T[star.t], s: 44 }),
+                    React.createElement("div", null,
+                        React.createElement("b", null, star.n),
+                        React.createElement("small", null,
+                            T[star.t]?.name,
+                            ", ",
+                            star.w,
+                            ". hafta")),
+                    React.createElement("div", { className: "sn" },
+                        "\u2B50 ",
+                        star.g,
+                        " gol",
+                        React.createElement("br", null),
+                        star.a,
+                        " asist"))) : null,
+            live.length ? React.createElement(React.Fragment, null,
+                React.createElement("h3", null, "\u015Eimdi canl\u0131"),
+                live.map((m) => React.createElement(Board, { key: m.id, m: m, T: T, min: minOf(m, now), onClick: () => open(m.id) }))) : null,
+            next ? React.createElement(React.Fragment, null,
+                React.createElement("h3", null, "S\u0131radaki ma\u00E7"),
+                React.createElement("div", { className: "card" },
+                    React.createElement(Row, { m: next, T: T, now: now, onOpen: open }))) : null,
+            d.teams.length ? React.createElement(React.Fragment, null,
+                React.createElement("h3", null,
+                    "Puan durumu ",
+                    React.createElement("a", { onClick: () => setTab("table") }, "Tam tablo")),
+                React.createElement(Table, { rows: rows.slice(0, 6), T: T, prevRank: prevRank })) : empty,
+            React.createElement("div", { className: "g2" },
+                React.createElement("div", null,
+                    React.createElement("h3", null, "Gol krall\u0131\u011F\u0131"),
+                    React.createElement(Leaders, { L: k.G, T: T, n: 3 })),
+                React.createElement("div", null,
+                    React.createElement("h3", null, "Asist liderleri"),
+                    React.createElement(Leaders, { L: k.A, T: T, n: 3 }))))),
+        table: () => d.teams.length ? React.createElement(React.Fragment, null,
+            React.createElement(Table, { rows: rows, T: T, prevRank: prevRank, full: true }),
+            React.createElement(Legend, { items: [["O", "Oynanan"], ["G", "Galibiyet"], ["B", "Beraberlik"], ["M", "Mağlubiyet"], ["AV", "Averaj (atılan − yenilen gol)"], ["P", "Puan"]], rule: "G = 3 puan \u00B7 B = 1 puan \u00B7 M = 0 puan \u00B7 E\u015Fit puanda s\u0131ra: averaj, sonra at\u0131lan gol" })) : empty,
+        fix: () => { if (!ms.length)
+            return empty; const wk = {}; ms.forEach((m) => (wk[m.week] = wk[m.week] || []).push(m)); return Object.keys(wk).map(Number).sort((a, b) => a - b).map((w) => React.createElement("div", { key: w },
+            React.createElement("h3", null,
+                w,
+                ". Hafta"),
+            React.createElement("div", { className: "card" }, wk[w].map((m) => React.createElement(Row, { key: m.id, m: m, T: T, now: now, onOpen: open }))))); },
+        match: () => { const m = ms.find((x) => x.id === mid); return m ? React.createElement(React.Fragment, null,
+            React.createElement("h3", null,
+                React.createElement("a", { onClick: () => setTab("fix") }, "\u2190 Fikst\u00FCr")),
+            React.createElement(Board, { m: m, T: T, min: minOf(m, now) })) : empty; },
+        stats: () => {
+            const pl = ms.filter((m) => m.status !== "sched").length;
+            return (React.createElement(React.Fragment, null,
+                React.createElement("h3", null, "Gol sayac\u0131"),
+                React.createElement("div", { className: "card pd" },
+                    React.createElement("b", { style: { fontSize: 34 } }, k.tg),
+                    " ",
+                    React.createElement("span", { style: { color: "var(--mu)" } },
+                        "gol, ",
+                        pl,
+                        " ma\u00E7ta",
+                        pl ? " · maç başına " + (k.tg / pl).toFixed(2) : "")),
+                React.createElement("div", { className: "g2" },
+                    React.createElement("div", null,
+                        React.createElement("h3", null, "Gol krall\u0131\u011F\u0131"),
+                        React.createElement(Leaders, { L: k.G, T: T, n: 10 })),
+                    React.createElement("div", null,
+                        React.createElement("h3", null, "Asist liderleri"),
+                        React.createElement(Leaders, { L: k.A, T: T, n: 10 }))),
+                ta.length ? React.createElement(React.Fragment, null,
+                    React.createElement("h3", null, "Tak\u0131m istatistikleri"),
+                    React.createElement("div", { className: "card ts dn" },
+                        React.createElement("table", { style: { minWidth: 880, fontSize: 12.5 } },
+                            React.createElement("thead", null,
+                                React.createElement("tr", { className: "gh" },
+                                    React.createElement("th", null),
+                                    React.createElement("th", { className: "gl", colSpan: 4 }, "Ma\u00E7"),
+                                    React.createElement("th", { className: "gl", colSpan: 4 }, "Gol"),
+                                    React.createElement("th", { className: "gl", colSpan: 2 }, "Puan"),
+                                    React.createElement("th", { className: "gl", colSpan: 3 }, "Sonu\u00E7 oran\u0131"),
+                                    React.createElement("th", { className: "gl", colSpan: 3 }, "Ma\u00E7 ba\u015F\u0131na")),
+                                React.createElement("tr", null,
+                                    React.createElement("th", null, "Tak\u0131m"),
+                                    React.createElement("th", { className: "gl" }, "O"),
+                                    React.createElement("th", null, "G"),
+                                    React.createElement("th", null, "B"),
+                                    React.createElement("th", null, "M"),
+                                    React.createElement("th", { className: "gl" }, "AG"),
+                                    React.createElement("th", null, "YG"),
+                                    React.createElement("th", null, "AV"),
+                                    React.createElement("th", null, "AS"),
+                                    React.createElement("th", { className: "gl" }, "P"),
+                                    React.createElement("th", null, "P/M"),
+                                    React.createElement("th", { className: "gl" }, "G%"),
+                                    React.createElement("th", null, "B%"),
+                                    React.createElement("th", null, "M%"),
+                                    React.createElement("th", { className: "gl" }, "AG/M"),
+                                    React.createElement("th", null, "YG/M"),
+                                    React.createElement("th", null, "AS/M"))),
+                            React.createElement("tbody", null, ta.map((r, i) => React.createElement("tr", { key: r.id },
+                                React.createElement("td", null,
+                                    React.createElement("span", { className: "tn" },
+                                        React.createElement("span", { style: { width: 16, color: "var(--mu)" } }, i + 1),
+                                        React.createElement(Cr, { t: T[r.id], s: 22 }),
+                                        T[r.id]?.name)),
+                                React.createElement("td", { className: "gl" }, r.o),
+                                React.createElement("td", null, r.g),
+                                React.createElement("td", null, r.b),
+                                React.createElement("td", null, r.m),
+                                React.createElement("td", { className: "gl" }, r.ag),
+                                React.createElement("td", null, r.yg),
+                                React.createElement("td", null, r.av),
+                                React.createElement("td", null, r.as),
+                                React.createElement("td", { className: "gl hi" }, r.p),
+                                React.createElement("td", null, r.pm),
+                                React.createElement("td", { className: "gl" }, r.gp),
+                                React.createElement("td", null, r.bp),
+                                React.createElement("td", null, r.mp),
+                                React.createElement("td", { className: "gl" }, r.gm),
+                                React.createElement("td", null, r.ym),
+                                React.createElement("td", null, r.am)))))),
+                    React.createElement(Legend, { items: [["O", "Oynanan"], ["G", "Galibiyet"], ["B", "Beraberlik"], ["M", "Mağlubiyet"], ["AG", "Atılan gol"], ["YG", "Yenilen gol"], ["AV", "Averaj"], ["AS", "Asist"], ["P", "Puan"], ["/M", "Maç başına"]], rule: "G = 3 puan \u00B7 B = 1 puan \u00B7 M = 0 puan \u00B7 E\u015Fit puanda s\u0131ra: averaj, sonra at\u0131lan gol" })) : null));
+        },
+        ref,
+        login,
+        injury: injView,
+        squad: squadView,
+        admin: () => (React.createElement("div", { className: "card pd" },
+            React.createElement("p", { className: "note", style: { margin: "0 0 8px" } }, "Her sat\u0131ra bir tak\u0131m yaz\u0131n: Tak\u0131m ad\u0131 | S\u0131n\u0131f (\u00F6rn. Hascelona | 9-C). Fikst\u00FCr otomatik kurulur."),
+            React.createElement("textarea", { rows: 10, value: tn == null ? d.teams.map((t) => t.name + (t.cls ? " | " + t.cls : "")).join("\n") : tn, onChange: (e) => setTn(e.target.value), placeholder: "Hascelona | 9-C\nHas Milan | 9-D" }),
+            React.createElement("label", null,
+                React.createElement("input", { type: "checkbox", checked: dbl, onChange: (e) => setDbl(e.target.checked) }),
+                "R\u00F6van\u015Fl\u0131 (i\u00E7 saha ve deplasman)"),
+            React.createElement("button", { className: "btn", onClick: build }, cf ? "Emin misiniz? Hepsi silinecek, tekrar basın" : "Fikstürü oluştur"))),
+    };
+    return (React.createElement("div", { className: "mfl" },
+        React.createElement("style", null, CSS),
+        React.createElement("div", { className: "top" },
+            React.createElement("div", { className: "tk" }, ticker.length ? ticker.map((m) => { const g = sc(m), a = (id) => tr((T[id]?.name || "").slice(0, 3)); return React.createElement("b", { key: m.id, className: m.status === "live" ? "lv" : "" },
+                a(m.home),
+                " ",
+                g.h,
+                "-",
+                g.a,
+                " ",
+                a(m.away)); }) : React.createElement("b", null, "MFL League 2026-27")),
+            React.createElement("div", { className: "hd" },
+                React.createElement("div", { className: "logo" },
+                    React.createElement("i", null, "MFL"),
+                    "League"),
+                live.length ? React.createElement("span", { className: "lt", style: { color: "#ff8a98", fontWeight: 700, fontSize: 12, display: "flex", gap: 6, alignItems: "center" } },
+                    React.createElement("i", { className: "dot" }),
+                    "Canl\u0131") : null),
+            React.createElement("nav", null, tabs.map(([key, n]) => React.createElement("button", { key: key, className: tab === key ? "on" : "", onClick: () => setTab(key) }, n)))),
+        React.createElement("main", null, (views[(tab === "ref" || tab === "admin") && !unlocked ? "login" : tab] || views.home)()),
+        msg ? React.createElement("div", { className: "toast" }, msg) : null));
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+})();
+</script>
+</body>
+</html>
